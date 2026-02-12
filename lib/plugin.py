@@ -1482,9 +1482,9 @@ def actionDownload(params):
                 )
                 return
 
-        xbmc_debug( 'Premium video workaround success' )
-        urls = is_premium
-        html = content
+            xbmc_debug( 'Premium video workaround success' )
+            urls = is_premium
+            html = content
 
         # Get embed URL (same as actionResolve)
         if 'playChapters' in params or ADDON.getSetting('chapterEpisodes') == 'true':
@@ -1644,48 +1644,87 @@ def actionDownload(params):
             )
             return
 
-        elif len(urls['source']) > 1:
-            download_method = ADDON.getSetting('downloadMethod')
-            
-            if download_method == '1': # Highest
-                urls['media'] = urls['source'][-1][1]
-            elif download_method == '2': # Lowest
-                urls['media'] = urls['source'][0][1]
+        force_select = False
+        while True:
+            if len(urls['source']) > 1:
+                download_method = ADDON.getSetting('downloadMethod')
+                
+                if not force_select and download_method == '1': # Highest
+                    urls['media'] = urls['source'][-1][1]
+                elif not force_select and download_method == '2': # Lowest
+                    urls['media'] = urls['source'][0][1]
+                else:
+                    selected_index = xbmcgui.Dialog().select(
+                        'Select Quality', [(sourceItem[0] or '?') for sourceItem in urls['source']]
+                    )
+                    if selected_index == -1:
+                        return
+                    urls['media'] = urls['source'][selected_index][1]
             else:
-                selected_index = xbmcgui.Dialog().select(
-                    'Select Quality', [(sourceItem[0] or '?') for sourceItem in urls['source']]
-                )
-                if selected_index == -1:
+                urls['media'] = urls['source'][0][1]
+
+            # Resolve stream URL
+            global MEDIA_HEADERS
+            if not MEDIA_HEADERS:
+                MEDIA_HEADERS = {
+                    'User-Agent': WNT2_USER_AGENT,
+                    'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
+                }
+
+            media_head = False
+            if flags['redirect']:
+                media_head = solve_media_redirect(urls['media'], MEDIA_HEADERS)
+                if not media_head and urls['backup']:
+                    media_head = solve_media_redirect(urls['backup'], MEDIA_HEADERS)
+                if not media_head:
+                    xbmcgui.Dialog().notification(
+                        PLUGIN_TITLE, 'Failed to resolve stream', xbmcgui.NOTIFICATION_ERROR, 3000, True
+                    )
                     return
-                urls['media'] = urls['source'][selected_index][1]
-        else:
-            urls['media'] = urls['source'][0][1]
+                urls['stream'] = media_head.url
+            else :
+                urls['stream'] = urls['media']
 
-        # Resolve stream URL
-        global MEDIA_HEADERS
-        if not MEDIA_HEADERS:
-            MEDIA_HEADERS = {
-                'User-Agent': WNT2_USER_AGENT,
-                'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
-            }
+            # Use HTTP if setting enabled
+            if ADDON.getSetting('useHTTP') == 'true':
+                urls['stream'] = urls['stream'].replace('https://', 'http://', 1)
 
-        media_head = False
-        if flags['redirect']:
-            media_head = solve_media_redirect(urls['media'], MEDIA_HEADERS)
-            if not media_head and urls['backup']:
-                media_head = solve_media_redirect(urls['backup'], MEDIA_HEADERS)
-            if not media_head:
-                xbmcgui.Dialog().notification(
-                    PLUGIN_TITLE, 'Failed to resolve stream', xbmcgui.NOTIFICATION_ERROR, 3000, True
-                )
+            # Get File Size
+            size_str = ""
+            try:
+                size_bytes = 0
+                if media_head and 'Content-Length' in media_head.headers:
+                    size_bytes = int(media_head.headers['Content-Length'])
+                elif not flags['m3u8']:
+                    # Try HEAD request
+                    h = rqs_get().head(urls['stream'], headers=MEDIA_HEADERS, verify=False, timeout=5)
+                    if 'Content-Length' in h.headers:
+                        size_bytes = int(h.headers['Content-Length'])
+                
+                if size_bytes > 0:
+                    if size_bytes < 1024 * 1024:
+                        size_str = "{:.2f} KB".format(size_bytes / 1024.0)
+                    elif size_bytes < 1024 * 1024 * 1024:
+                        size_str = "{:.2f} MB".format(size_bytes / (1024.0 * 1024.0))
+                    else:
+                        size_str = "{:.2f} GB".format(size_bytes / (1024.0 * 1024.0 * 1024.0))
+            except:
+                pass
+
+            # Confirmation Dialog
+            opts = ["Download" + (" (" + size_str + ")" if size_str else "")]
+            if len(urls['source']) > 1:
+                opts.append("Change Quality")
+            
+            ret = xbmcgui.Dialog().select("Confirm Download", opts)
+            
+            if ret == 0:
+                break
+            elif ret == 1 and len(urls['source']) > 1:
+                force_select = True
+                continue
+            else:
                 return
-            urls['stream'] = media_head.url
-        else :
-            urls['stream'] = urls['media']
-
-        # Use HTTP if setting enabled
-        if ADDON.getSetting('useHTTP') == 'true':
-            urls['stream'] = urls['stream'].replace('https://', 'http://', 1)
 
         filepath = translate_path(download_dir)
         
