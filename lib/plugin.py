@@ -18,6 +18,7 @@ from lib.network import rqs_get, request_helper
 from lib.recently_watched import recently_watched_load, recently_watched_add, recently_watched_remove
 
 from lib.integration.trakt_actions import *
+from lib.download_manager import DownloadManager
 
 if BASEURL_SETTING == 1:
     from lib.sites.wcoflix import *
@@ -1353,8 +1354,6 @@ def actionDownload(params):
 
     """ Downloads a video to the user's specified location """
 
-    progress_dialog = None
-
     try:
         # Get the video title from the current list item
         filename = xbmc.getInfoLabel('ListItem.Label')
@@ -1607,82 +1606,19 @@ def actionDownload(params):
         if ADDON.getSetting('useHTTP') == 'true':
             urls['stream'] = urls['stream'].replace('https://', 'http://', 1)
 
-        # Create progress dialog for actual download
-        progress_dialog = xbmcgui.DialogProgress()
-        progress_dialog.create(PLUGIN_TITLE, 'Downloading: ' + filename)
-
-        # Download the file
-        response = rqs_get().get(
+        filepath = translate_path(download_dir)
+        
+        DownloadManager().download(
             urls['stream'],
-            stream=True,
+            filepath,
+            filename,
             headers={
                 'User-Agent': WNT2_USER_AGENT,
                 'Referer': BASEURL + '/',
-            },
-            verify=False,
-            timeout=30
-        )
-
-        if not response.ok:
-            progress_dialog.close()
-            xbmcgui.Dialog().notification(
-                PLUGIN_TITLE, 'Failed to download: HTTP ' + str(response.status_code), xbmcgui.NOTIFICATION_ERROR, 3000, True
-            )
-            return
-
-        # Determine file extension
-        content_type = response.headers.get('Content-Type', 'video/mp4').lower()
-        if 'mp4' in content_type:
-            file_ext = '.mp4'
-        elif 'webm' in content_type:
-            file_ext = '.webm'
-        elif 'ogg' in content_type or 'ogv' in content_type:
-            file_ext = '.ogv'
-        elif 'quicktime' in content_type:
-            file_ext = '.mov'
-        else:
-            file_ext = '.mp4'
-
-        filepath = translate_path(download_dir)
-        if not filepath.endswith(os.sep):
-            filepath += os.sep
-        filepath += filename + file_ext
-
-        # Download with progress and cancel support
-        total_size = int(response.headers.get('content-length', 0))
-        downloaded = 0
-
-        with open(filepath, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                # Check if user cancelled
-                if progress_dialog.iscanceled():
-                    progress_dialog.close()
-                    f.close()
-                    # Delete partial file
-                    try:
-                        xbmcvfs.delete(filepath)
-                    except:
-                        pass
-                    return
-
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        percent = int((downloaded / total_size) * 100)
-                        progress_dialog.update(percent)
-
-        progress_dialog.close()
-        xbmcgui.Dialog().notification(
-            PLUGIN_TITLE, 'Download completed: ' + filename + file_ext, xbmcgui.NOTIFICATION_INFO, 3000, True
+            }
         )
 
     except Exception as e:
-        try:
-            if progress_dialog:
-                progress_dialog.close()
-        except:
-            pass
         xbmc_debug('actionDownload error:', str(e))
         xbmcgui.Dialog().notification(
             PLUGIN_TITLE, 'Error: ' + str(e), xbmcgui.NOTIFICATION_ERROR, 3000, True
