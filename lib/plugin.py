@@ -1367,7 +1367,7 @@ def actionDownloadsMenu(params):
         progress = task['progress']
         
         if status == 'downloading':
-            label = '[COLOR orange][B]Downloading:[/B][/COLOR] %s (%d%%)' % (name, progress)
+            label = '[COLOR orange][B]Downloading:[/B][/COLOR] (%d%%) %s' % (progress, name)
         elif status == 'completed':
             label = '[COLOR lightgreen][B]Completed:[/B][/COLOR] %s' % name
         elif status == 'error':
@@ -1417,6 +1417,8 @@ def actionDownload(params):
         if not filename:
             xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Unable to get video name', xbmcgui.NOTIFICATION_ERROR, 3000, True)
             return
+
+        xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Getting quality...', ADDON_ICON, 2000, False)
 
         # Clean filename
         invalid_chars = r'[<>:"/\\|?*]'
@@ -1628,12 +1630,19 @@ def actionDownload(params):
             return
 
         elif len(urls['source']) > 1:
-            selected_index = xbmcgui.Dialog().select(
-                'Select Quality', [(sourceItem[0] or '?') for sourceItem in urls['source']]
-            )
-            if selected_index == -1:
-                return
-            urls['media'] = urls['source'][selected_index][1]
+            download_method = ADDON.getSetting('downloadMethod')
+            
+            if download_method == '1': # Highest
+                urls['media'] = urls['source'][-1][1]
+            elif download_method == '2': # Lowest
+                urls['media'] = urls['source'][0][1]
+            else:
+                selected_index = xbmcgui.Dialog().select(
+                    'Select Quality', [(sourceItem[0] or '?') for sourceItem in urls['source']]
+                )
+                if selected_index == -1:
+                    return
+                urls['media'] = urls['source'][selected_index][1]
         else:
             urls['media'] = urls['source'][0][1]
 
