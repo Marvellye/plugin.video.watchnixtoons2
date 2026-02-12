@@ -61,6 +61,8 @@ def actionMenu(params):
             _menuItem( __language__(30057), {'action': 'actionRecentlyWatchedMenu', 'path': 'recently_watched'}, 'orange'),
             # Search - Non-web path.
             _menuItem( xbmc.getLocalizedString(137), {'action': 'actionSearchMenu',  'path': 'search'}, 'lavender'),
+            # Downloads
+            _menuItem( 'Downloads', {'action': 'actionDownloadsMenu', 'path': 'downloads'}, 'lavender'),
             # Settings - Non-web path.
             _menuItem( xbmc.getLocalizedString(1390), {'action': 'actionShowSettings','path': 'settings'}, 'lavender')
         )
@@ -1349,6 +1351,61 @@ def get_parent_page(html):
     name = unescapeHTMLText(match.group(2).strip()) if match else ''
 
     return { 'name': name, 'url': url }
+
+def actionDownloadsMenu(params):
+    """ Lists current and past downloads """
+    
+    dm = DownloadManager()
+    tasks = dm.get_tasks()
+    
+    if not tasks:
+        xbmcplugin.addDirectoryItem(PLUGIN_ID, '', xbmcgui.ListItem('(No Downloads)'), isFolder=False)
+    
+    for task in tasks:
+        status = task['status']
+        name = task['name']
+        progress = task['progress']
+        
+        if status == 'downloading':
+            label = '[COLOR orange][B]Downloading:[/B][/COLOR] %s (%d%%)' % (name, progress)
+        elif status == 'completed':
+            label = '[COLOR lightgreen][B]Completed:[/B][/COLOR] %s' % name
+        elif status == 'error':
+            label = '[COLOR red][B]Error:[/B][/COLOR] %s' % name
+        elif status == 'cancelled':
+            label = '[COLOR gray][B]Cancelled:[/B][/COLOR] %s' % name
+        else:
+            label = '[B]%s:[/B] %s' % (status.title(), name)
+            
+        item = xbmcgui.ListItem(label)
+        
+        # Context menu
+        cm = []
+        if status in ['downloading', 'pending']:
+            cm.append(('Cancel Download', 'RunPlugin(%s?action=actionDownloadCancel&id=%s)' % (PLUGIN_URL, task['id'])))
+        else:
+            cm.append(('Remove from List', 'RunPlugin(%s?action=actionDownloadRemove&id=%s)' % (PLUGIN_URL, task['id'])))
+            
+        item.addContextMenuItems(cm)
+        
+        # Make it do nothing on click, or maybe refresh
+        url = build_url({'action': 'actionDownloadsMenu', 'path': 'downloads'})
+        
+        xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
+        
+    xbmcplugin.endOfDirectory(PLUGIN_ID)
+
+def actionDownloadCancel(params):
+    if 'id' in params:
+        DownloadManager().cancel(params['id'])
+        xbmc.sleep(500)
+        xbmc.executebuiltin('Container.Refresh')
+
+def actionDownloadRemove(params):
+    if 'id' in params:
+        DownloadManager().remove(params['id'])
+        xbmc.sleep(200)
+        xbmc.executebuiltin('Container.Refresh')
 
 def actionDownload(params):
 
