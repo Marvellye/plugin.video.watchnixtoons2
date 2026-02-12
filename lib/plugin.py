@@ -1415,9 +1415,26 @@ def actionDownloadsMenu(params):
 
     # Add Resume/Start Queue option if there are pending items
     pending = [t for t in tasks if t['status'] == 'pending']
-    if pending:
-        item = xbmcgui.ListItem('[B]Start/Resume Queue[/B]')
-        url = build_url({'action': 'actionDownloadStartQueue'})
+    downloading = [t for t in tasks if t['status'] == 'downloading']
+    
+    if pending or downloading:
+        if (not dm.active_thread or not dm.active_thread.is_alive()) and \
+           xbmcgui.Window(10000).getProperty('wnt2_dm_running') != 'true':
+            item = xbmcgui.ListItem('[B]Start Queue[/B]')
+            url = build_url({'action': 'actionDownloadStartQueue'})
+            xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
+        else:
+            item = xbmcgui.ListItem('[B]Pause All[/B]')
+            url = build_url({'action': 'actionDownloadPauseAll'})
+            xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
+
+    if tasks:
+        item = xbmcgui.ListItem('[B]Cancel All[/B]')
+        url = build_url({'action': 'actionDownloadCancelAll'})
+        xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
+
+        item = xbmcgui.ListItem('[B]Remove All[/B]')
+        url = build_url({'action': 'actionDownloadRemoveAll'})
         xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
         
     xbmcplugin.endOfDirectory(PLUGIN_ID)
@@ -1428,11 +1445,26 @@ def actionDownloadCancel(params):
         xbmc.sleep(500)
         xbmc.executebuiltin('Container.Refresh')
 
+def actionDownloadCancelAll(params):
+    DownloadManager.getInstance().cancel_all()
+    xbmc.sleep(500)
+    xbmc.executebuiltin('Container.Refresh')
+
+def actionDownloadPauseAll(params):
+    DownloadManager.getInstance().pause_all()
+    xbmc.sleep(200)
+    xbmc.executebuiltin('Container.Refresh')
+
 def actionDownloadRemove(params):
     if 'id' in params:
         DownloadManager.getInstance().remove(params['id'])
         xbmc.sleep(200)
         xbmc.executebuiltin('Container.Refresh')
+
+def actionDownloadRemoveAll(params):
+    DownloadManager.getInstance().remove_all()
+    xbmc.sleep(200)
+    xbmc.executebuiltin('Container.Refresh')
 
 def actionDownloadStartQueue(params):
     DownloadManager.getInstance().start(resolve_stream_url)

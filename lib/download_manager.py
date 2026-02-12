@@ -69,9 +69,12 @@ class DownloadManager:
         xbmcgui.Dialog().notification('Download Added', name, xbmcgui.NOTIFICATION_INFO)
 
     def start(self, resolve_func=None):
-        if self.active_thread and self.active_thread.is_alive():
+        if (self.active_thread and self.active_thread.is_alive()) or \
+           xbmcgui.Window(10000).getProperty('wnt2_dm_running') == 'true':
             return
         self.stop_flag = False
+        xbmcgui.Window(10000).setProperty('wnt2_dm_running', 'true')
+        xbmcgui.Window(10000).clearProperty('wnt2_dm_stop')
         self.active_thread = threading.Thread(target=self._worker, args=(resolve_func,))
         self.active_thread.start()
         xbmcgui.Dialog().notification('Download Manager', 'Queue Started', xbmcgui.NOTIFICATION_INFO)
@@ -80,11 +83,18 @@ class DownloadManager:
         self.stop_flag = True
 
     def _worker(self, resolve_func):
-        while not self.stop_flag:
-            task = next((t for t in self.tasks if t['status'] == 'pending'), None)
-            if not task:
-                break
-            self._process_task(task, resolve_func)
+        try:
+            while not self.stop_flag:
+                if xbmcgui.Window(10000).getProperty('wnt2_dm_stop') == 'true':
+                    self.stop_flag = True
+                    break
+                task = next((t for t in self.tasks if t['status'] == 'pending'), None)
+                if not task:
+                    break
+                self._process_task(task, resolve_func)
+        finally:
+            xbmcgui.Window(10000).clearProperty('wnt2_dm_running')
+            self.active_thread = None
 
     def _process_task(self, task, resolve_func):
         try:
@@ -105,19 +115,32 @@ class DownloadManager:
             
             self._download_file(task, stream_url)
             
-            # Check if cancelled during download
-            current_task = next((t for t in self.tasks if t['id'] == task['id']), None)
-            if current_task and current_task['status'] == 'downloading':
-                current_task['status'] = 'completed'
-                current_task['progress'] = 100
-                self._save_tasks()
-                xbmcgui.Dialog().notification('Download Completed', task['name'], xbmcgui.NOTIFICATION_INFO)
+            task['status'] = 'completed'
+            task['progress'] = 100
+            self._save_tasks()
+            xbmcgui.Dialog().notification('Download Completed', task['name'], xbmcgui.NOTIFICATION_INFO)
 
         except Exception as e:
-            task['status'] = 'error'
-            task['error'] = str(e)
-            self._save_tasks()
-            xbmcgui.Dialog().notification('Download Error', str(e), xbmcgui.NOTIFICATION_ERROR)
+            msg = str(e)
+            if task['status'] == 'cancelling' or msg == 'Cancelled':
+                task['status'] = 'cancelled'
+                xbmcgui.Window(10000).clearProperty('wnt2_dm_cancel_' + str(task['id']))
+                if os.path.exists(task.get('filepath', '')):
+                    try: os.remove(task['filepath'])
+                    except: pass
+                self._save_tasks()
+            elif self.stop_flag or msg == 'Stopped':
+                task['status'] = 'pending'
+                task['progress'] = 0
+                if os.path.exists(task.get('filepath', '')):
+                    try: os.remove(task['filepath'])
+                    except: pass
+                self._save_tasks()
+            else:
+                task['status'] = 'error'
+                task['error'] = msg
+                self._save_tasks()
+                xbmcgui.Dialog().notification('Download Error', msg, xbmcgui.NOTIFICATION_ERROR)
 
     def _download_file(self, task, url):
         headers = {
@@ -144,6 +167,12 @@ class DownloadManager:
         filepath = os.path.join(task['folder'], filename)
         task['filepath'] = filepath
         self._save_tasks()
+        
+        if os.path.exists(filepath):
+            remote_size = int(response.headers.get('content-length', 0))
+            local_size = os.path.getsize(filepath)
+            if local_size > 0 and (remote_size == 0 or local_size == remote_size):
+                return
 
         total_size = int(response.headers.get('content-length', 0))
         downloaded = 0
@@ -152,20 +181,13 @@ class DownloadManager:
         
         with open(filepath, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
-                if self.stop_flag:
-                    raise Exception('Stopped by user')
+                if self.stop_flag or xbmcgui.Window(10000).getProperty('wnt2_dm_stop') == 'true':
+                    raise Exception('Stopped')
+                
+                if task['status'] == 'cancelling' or xbmcgui.Window(10000).getProperty('wnt2_dm_cancel_' + str(task['id'])) == 'true':
+                    raise Exception('Cancelled')
 
                 chunk_count += 1
-                if chunk_count % 20 == 0:
-                    current_task = next((t for t in self.tasks if t['id'] == task['id']), None)
-                    if not current_task or current_task.get('status') == 'cancelling':
-                        f.close()
-                        if os.path.exists(filepath):
-                            os.remove(filepath)
-                        if current_task:
-                            current_task['status'] = 'cancelled'
-                            self._save_tasks()
-                        return
 
                 if chunk:
                     f.write(chunk)
@@ -178,13 +200,37 @@ class DownloadManager:
                             last_update = percent
 
     def cancel(self, task_id):
-        task = next((t for t in self.tasks if t['id'] == task_id), None)
-        if task:
-            if task['status'] == 'downloading':
-                task['status'] = 'cancelling'
-            elif task['status'] == 'pending':
-                task['status'] = 'cancelled'
+        with self._lock:
+            task = next((t for t in self.tasks if t['id'] == task_id), None)
+            if task:
+                if task['status'] == 'downloading':
+                    task['status'] = 'cancelling'
+                elif task['status'] == 'pending':
+                    task['status'] = 'cancelled'
+                xbmcgui.Window(10000).setProperty('wnt2_dm_cancel_' + str(task_id), 'true')
+                self._save_tasks()
+
+    def cancel_all(self):
+        with self._lock:
+            for task in self.tasks:
+                if task['status'] == 'downloading':
+                    task['status'] = 'cancelling'
+                    xbmcgui.Window(10000).setProperty('wnt2_dm_cancel_' + str(task['id']), 'true')
+                elif task['status'] == 'pending':
+                    task['status'] = 'cancelled'
+                    xbmcgui.Window(10000).setProperty('wnt2_dm_cancel_' + str(task['id']), 'true')
             self._save_tasks()
+
+    def pause_all(self):
+        self.stop_flag = True
+        xbmcgui.Window(10000).setProperty('wnt2_dm_stop', 'true')
+
+    def remove_all(self):
+        self.cancel_all()
+        self.tasks = []
+        self._save_tasks()
+        self.stop_flag = True
+        xbmcgui.Window(10000).setProperty('wnt2_dm_stop', 'true')
 
     def remove(self, task_id):
         self.cancel(task_id)
