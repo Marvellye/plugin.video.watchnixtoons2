@@ -1468,8 +1468,23 @@ def actionDownload(params):
 
         # check if is a premium only video
         if 'This Video is For the WCO Premium Users Only' in content:
-            xbmcgui.Dialog().ok(PLUGIN_TITLE, 'This is a premium-only video')
-            return
+
+            xbmc_debug( 'Premium video detected, attempting to work around for domain: ' + BASEURL )
+            # check if there is a premium workaround in the site class
+            is_premium = premium_workaround_check( content, urls )
+
+            if is_premium is False:
+                xbmc_debug( 'Premium video workaround failed' )
+                # Notify about premium only video
+                xbmcgui.Dialog().ok(
+                    PLUGIN_TITLE + ' Fail',
+                    'The video has been marked as "only for premium users".'
+                )
+                return
+
+        xbmc_debug( 'Premium video workaround success' )
+        urls = is_premium
+        html = content
 
         # Get embed URL (same as actionResolve)
         if 'playChapters' in params or ADDON.getSetting('chapterEpisodes') == 'true':
