@@ -1046,6 +1046,13 @@ def makeListItem(title, url, art_dict, plot, is_folder, is_special, oldParams, i
                 'RunPlugin('+PLUGIN_URL+'?action=actionDownload&url='+urllib_parse.quote_plus(url)+')'
             )
         )
+    elif is_folder:
+        context_menu_list.append(
+            (
+                'Download Show',
+                'RunPlugin('+PLUGIN_URL+'?action=actionDownloadShow&url='+urllib_parse.quote_plus(url)+')'
+            )
+        )
     if isRecent:
         # So item can be removed
         context_menu_list.append(
@@ -1144,6 +1151,13 @@ def makeListItemClean(title, url, art_dict, plot, is_folder, is_special, oldPara
             (
                 'Download',
                 'RunPlugin('+PLUGIN_URL+'?action=actionDownload&url='+urllib_parse.quote_plus(url)+')'
+            )
+        )
+    elif is_folder:
+        context_menu_list.append(
+            (
+                'Download Show',
+                'RunPlugin('+PLUGIN_URL+'?action=actionDownloadShow&url='+urllib_parse.quote_plus(url)+')'
             )
         )
 
@@ -1362,7 +1376,7 @@ def get_parent_page(html):
 def actionDownloadsMenu(params):
     """ Lists current and past downloads """
     
-    dm = DownloadManager()
+    dm = DownloadManager.getInstance()
     tasks = dm.get_tasks()
     
     if not tasks:
@@ -1397,22 +1411,32 @@ def actionDownloadsMenu(params):
         
         # Make it do nothing on click, or maybe refresh
         url = build_url({'action': 'actionDownloadsMenu', 'path': 'downloads'})
-        
+        xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
+
+    # Add Resume/Start Queue option if there are pending items
+    pending = [t for t in tasks if t['status'] == 'pending']
+    if pending:
+        item = xbmcgui.ListItem('[B]Start/Resume Queue[/B]')
+        url = build_url({'action': 'actionDownloadStartQueue'})
         xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
         
     xbmcplugin.endOfDirectory(PLUGIN_ID)
 
 def actionDownloadCancel(params):
     if 'id' in params:
-        DownloadManager().cancel(params['id'])
+        DownloadManager.getInstance().cancel(params['id'])
         xbmc.sleep(500)
         xbmc.executebuiltin('Container.Refresh')
 
 def actionDownloadRemove(params):
     if 'id' in params:
-        DownloadManager().remove(params['id'])
+        DownloadManager.getInstance().remove(params['id'])
         xbmc.sleep(200)
         xbmc.executebuiltin('Container.Refresh')
+
+def actionDownloadStartQueue(params):
+    DownloadManager.getInstance().start(resolve_stream_url)
+    xbmc.executebuiltin('Container.Refresh')
 
 def actionDownload(params):
 
@@ -1748,15 +1772,9 @@ def actionDownload(params):
         if not os.path.exists(filepath):
             os.makedirs(filepath)
         
-        DownloadManager().download(
-            urls['stream'],
-            filepath,
-            filename,
-            headers={
-                'User-Agent': WNT2_USER_AGENT,
-                'Referer': BASEURL + '/',
-            }
-        )
+        dm = DownloadManager.getInstance()
+        dm.add_task(filename, filepath, stream_url=urls['stream'])
+        dm.start(resolve_stream_url)
 
     except Exception as e:
         xbmc_debug('actionDownload error:', str(e))
@@ -2106,6 +2124,194 @@ def actionResolve(params):
     else:
         # Failed. No source found, or the user didn't select one from the dialog.
         xbmcplugin.setResolvedUrl(PLUGIN_ID, False, xbmcgui.ListItem())
+
+def actionDownloadShow(params):
+    url = params['url']
+    
+    # Get show title for folder name
+    show_title = params.get('showTitle')
+    if not show_title:
+        # Try to get it from list item
+        show_title = xbmc.getInfoLabel('ListItem.Label')
+
+    if not show_title:
+        xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Cannot determine show title', xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    # Ask for confirmation
+    if not xbmcgui.Dialog().yesno(PLUGIN_TITLE, 'Download all episodes for "%s"?' % show_title):
+        return
+
+    xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Getting episode list...', ADDON_ICON)
+
+    # Scrape episodes (reuse logic from actionEpisodesMenu)
+    r = request_helper(ensure_full_url(BASEURL, url))
+    html = r.text
+    
+    data_start_index = html.find(SITE_SETTINGS['episode']['start'])
+    if data_start_index == -1:
+        xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Failed to scrape episodes', xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    episodes = [
+        (match.group('link'), match.group('name'))
+        for match in re.finditer(
+            SITE_SETTINGS['episode']['regex'], 
+            html[data_start_index : html.find(SITE_SETTINGS['episode']['end'])]
+        )
+    ]
+
+    if not episodes:
+        xbmcgui.Dialog().notification(PLUGIN_TITLE, 'No episodes found', xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    # Determine download directory
+    base_dir = ADDON.getSetting('downloadPathTV')
+    if not base_dir:
+        xbmcgui.Dialog().ok(PLUGIN_TITLE, 'Please set the TV Shows download folder in the settings')
+        return
+        
+    invalid_chars = r'[<>:"/\\|?*]'
+    clean_show_title = re.sub(invalid_chars, '_', show_title).strip()
+    download_dir = os.path.join(base_dir, clean_show_title)
+    
+    if not os.path.exists(download_dir):
+        os.makedirs(download_dir)
+
+    # Add tasks
+    dm = DownloadManager.getInstance()
+    count = 0
+    
+    # Reverse if needed (settings)
+    if ADDON.getSetting('reverseEpisodes') == 'false':
+        episodes = reversed(episodes)
+
+    for ep_url, ep_title in episodes:
+        ep_url = base_url_remove(BASEURL, ep_url)
+        ep_title = unescapeHTMLText(ep_title)
+        clean_title = re.sub(invalid_chars, '_', ep_title).strip()
+        
+        dm.add_task(clean_title, download_dir, page_url=ep_url)
+        count += 1
+
+    xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Added %d episodes to queue' % count, xbmcgui.NOTIFICATION_INFO)
+    dm.start(resolve_stream_url)
+
+def resolve_stream_url(page_url):
+    """ Helper to resolve stream URL non-interactively for downloads """
+    urls = {
+        'page': ensure_current_domain(page_url, BASEDOMAIN, domains_get()),
+        'embed': None, 'stream': None, 'media': None, 'backup': None, 'source': []
+    }
+    flags = {'redirect': True, 'm3u8': False}
+
+    r = request_helper(urls['page'])
+    content = r.content
+    if six.PY3: content = content.decode('utf-8')
+
+    # Premium check
+    if 'This Video is For the WCO Premium Users Only' in content:
+        is_premium = premium_workaround_check(content, urls)
+        if is_premium: urls = is_premium
+        else: return None
+
+    # Get embed URL (simplified logic from actionResolve)
+    if 'uploads0" src=' in content:
+        urls['embed'] = re.search(r'<iframe\s*id=\"(?:[a-zA-Z]+)uploads(?:[0-9]+)\"\s*src=\"([^\"]+)\"', content, re.DOTALL).group(1)
+    elif '-js-0" src=' in content:
+        urls['embed'] = re.search(r'<iframe\s*(?:rel=\"nofollow\")?\s*id=\"(?:[a-zA-Z]+)\-js\-(?:[0-9]+)\"\s*src=\"([^\"]+)\"', content, re.DOTALL).group(1)
+    elif '"vjs_iframe"' in content:
+        urls['embed'] = re.search(r'<iframe id=\"(?:[a-zA-Z0-9-]+)\" class=\"vjs_iframe\" rel=\"nofollow\" src=\"([^\"]+)\"', content, re.DOTALL).group(1)
+        flags['m3u8'] = True
+    else:
+        embed_url_pattern = r'onclick="myFunction'
+        embed_url_index = content.find(embed_url_pattern)
+        if embed_url_index <= 0:
+            embed_url_pattern = r'class="episode-descp"'
+            embed_url_index = content.find(embed_url_pattern)
+        
+        # Helper to decode source
+        def _decodeSource(subContent):
+            if six.PY3: subContent = str(subContent)
+            try:
+                return_url = re.search(r'src="([^"]+)', subContent).group(1)
+                return ensure_full_url(BASEURL, return_url)
+            except: return None
+            
+        urls['embed'] = _decodeSource(content[embed_url_index:])
+
+    if not urls['embed'] and not urls['stream']: return None
+
+    # Resolve stream from embed
+    if not urls['stream']:
+        if 'inc/embed/index.php' in urls['embed']:
+            urls['embed'] = urls['embed'].replace('inc/embed/index.php', 'inc/embed/video-js.php')
+        
+        r2 = request_helper(unescapeHTMLText(urls['embed']), extra_headers={'Referer': urls['embed']})
+        html = r2.text
+        
+        if 'getvid?evid' in html:
+            try:
+                if 'getRedirectedUrl(videoUrl)' in html:
+                    source_url = re.search(r'\$\.getJSON\(\"([^\"]+)\"', html, re.DOTALL).group(1)
+                    source_url = "https://embed.wcostream.com/" + source_url + "&json"
+                else:
+                    source_url = re.search(r'"(/inc/embed/getvidlink[^"]+)', html, re.DOTALL).group(1)
+                    source_url = BASEURL + source_url
+                
+                r3 = request_helper(source_url, extra_headers={'Accept': '*/*', 'Referer': urls['embed'], 'X-Requested-With': 'XMLHttpRequest'})
+                if r3.ok:
+                    json_data = r3.json()
+                    token_sd = json_data.get('enc', '')
+                    token_hd = json_data.get('hd', '')
+                    token_fhd = json_data.get('fhd', '')
+                    source_base_url = json_data.get('server', '') + '/getvid?evid='
+                    
+                    if token_sd: urls['source'].append((quality_label(480), source_base_url + token_sd))
+                    if token_hd: urls['source'].append((quality_label(720), source_base_url + token_hd))
+                    if token_fhd: urls['source'].append((quality_label(1080), source_base_url + token_fhd))
+            except: pass
+        elif urls['stream']:
+            urls['source'].append((quality_label(480), urls['stream']))
+        elif flags['m3u8']:
+            try:
+                m3u8_url = re.search(r'<source\s*src=\"([^\"]+)\"', html, re.DOTALL).group(1)
+                urls['source'].append((quality_label(1080), m3u8_url))
+                flags['redirect'] = False
+            except: pass
+        elif 'getRedirectedUrl("' in html:
+            try:
+                m3u8_url = re.search(r'getRedirectedUrl\(\"([^\"]+)', html, re.DOTALL).group(1)
+                urls['source'].append((quality_label(1080), m3u8_url))
+                flags['redirect'] = False
+                flags['m3u8'] = True
+            except: pass
+        else:
+            try:
+                sources_block = re.search(r'sources:\s*?\[(.*?)\]', html, re.DOTALL).group(1)
+                stream_pattern = re.compile(r'\{\s*?file:\s*?"(.*?)"(?:,\s*?label:\s*?"(.*?)")?')
+                urls['source'] = [(m.group(2), m.group(1)) for m in stream_pattern.finditer(sources_block)]
+            except: pass
+
+    if not urls['source']: return None
+
+    # Select quality based on settings
+    download_method = ADDON.getSetting('downloadMethod')
+    if download_method == '2': # Lowest
+        urls['media'] = urls['source'][0][1]
+    else: # Highest or Dialog (default to highest for bulk)
+        urls['media'] = urls['source'][-1][1]
+
+    # Resolve final stream
+    global MEDIA_HEADERS
+    if not MEDIA_HEADERS:
+        MEDIA_HEADERS = {'User-Agent': WNT2_USER_AGENT, 'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5'}
+
+    if flags['redirect']:
+        media_head = solve_media_redirect(urls['media'], MEDIA_HEADERS)
+        if media_head: return media_head.url
+    
+    return urls['media']
 
 def get_thumbnail_headers():
 
