@@ -1372,8 +1372,6 @@ def actionDownload(params):
             xbmcgui.Dialog().ok(PLUGIN_TITLE, 'Please set the download folder in the settings')
             return
 
-        progress_dialog = xbmcgui.DialogProgress()
-        progress_dialog.create(PLUGIN_TITLE, 'Preparing download...')
         # Reuse the resolution logic from actionResolve
         urls = {
             'page': ensure_current_domain( params['url'], BASEDOMAIN, domains_get() ),
@@ -1389,7 +1387,6 @@ def actionDownload(params):
             'm3u8': False,
         }
 
-        progress_dialog.update(10, 'Fetching page...')
         r = request_helper( urls['page'] )
         content = r.content
 
@@ -1413,7 +1410,6 @@ def actionDownload(params):
 
         # check if is a premium only video
         if 'This Video is For the WCO Premium Users Only' in content:
-            progress_dialog.close()
             xbmcgui.Dialog().ok(PLUGIN_TITLE, 'This is a premium-only video')
             return
 
@@ -1421,11 +1417,9 @@ def actionDownload(params):
         if 'playChapters' in params or ADDON.getSetting('chapterEpisodes') == 'true':
             data_indices = re.compile( SITE_SETTINGS[ 'chapter' ][ 'regex' ], re.MULTILINE ).findall(content)
             if len(data_indices) > 1:
-                progress_dialog.close()
                 selected_index = xbmcgui.Dialog().select(
                     'Select Chapter', ['Chapter '+str(n) for n in xrange(1, len(data_indices)+1)]
                 )
-                progress_dialog.create(PLUGIN_TITLE, 'Preparing download...')
             else:
                 selected_index = 0
 
@@ -1455,7 +1449,6 @@ def actionDownload(params):
             urls['embed'] = _decodeSource(content[embed_url_index:])
 
         if not urls['embed'] and not urls['stream']:
-            progress_dialog.close()
             xbmcgui.Dialog().ok(PLUGIN_TITLE, 'Unable to find a playable source')
             return
 
@@ -1463,7 +1456,6 @@ def actionDownload(params):
             if 'inc/embed/index.php' in urls['embed']:
                 urls['embed'] = urls['embed'].replace( 'inc/embed/index.php', 'inc/embed/video-js.php' )
 
-            progress_dialog.update(25, 'Fetching embed player...')
             r2 = request_helper(
                 unescapeHTMLText(urls['embed']),
                 data = None,
@@ -1474,14 +1466,11 @@ def actionDownload(params):
             html = r2.text
 
         if 'high volume of requests' in html:
-            progress_dialog.close()
             xbmcgui.Dialog().ok(
-                PLUGIN_TITLE + ' Fail',
+                PLUGIN_TITLE,
                 'Server temporarily blocked due to high volume'
             )
             return
-
-        progress_dialog.update(50, 'Getting video sources...')
 
         # Find the stream URLs (same logic as actionResolve)
         if 'getvid?evid' in html:
@@ -1504,7 +1493,6 @@ def actionDownload(params):
                 )
 
                 if not r3.ok:
-                    progress_dialog.close()
                     xbmcgui.Dialog().notification(
                         PLUGIN_TITLE, 'Failed to get video source', xbmcgui.NOTIFICATION_ERROR, 3000, True
                     )
@@ -1525,7 +1513,6 @@ def actionDownload(params):
 
                 urls['backup'] = json_data.get('cdn', '') + '/getvid?evid=' + (token_sd or token_hd or token_fhd)
             except Exception as e:
-                progress_dialog.close()
                 xbmc_debug('Error resolving getvid source:', str(e))
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to resolve video source: ' + str(e), xbmcgui.NOTIFICATION_ERROR, 3000, True
@@ -1541,7 +1528,6 @@ def actionDownload(params):
                 urls['source'].append((quality_label(1080), m3u8_url))
                 flags['redirect'] = False
             except Exception as e:
-                progress_dialog.close()
                 xbmc_debug('Error parsing m3u8:', str(e))
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to parse m3u8 URL', xbmcgui.NOTIFICATION_ERROR, 3000, True
@@ -1555,7 +1541,6 @@ def actionDownload(params):
                 flags['redirect'] = False
                 flags['m3u8'] = True
             except Exception as e:
-                progress_dialog.close()
                 xbmc_debug('Error parsing redirected URL:', str(e))
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to parse redirected URL', xbmcgui.NOTIFICATION_ERROR, 3000, True
@@ -1573,7 +1558,6 @@ def actionDownload(params):
                 backup_match = stream_pattern.search(html[html.find('jw.onError'):])
                 urls['backup'] = backup_match.group(1) if backup_match else ''
             except Exception as e:
-                progress_dialog.close()
                 xbmc_debug('Error parsing sources:', str(e))
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to parse video sources', xbmcgui.NOTIFICATION_ERROR, 3000, True
@@ -1582,22 +1566,18 @@ def actionDownload(params):
 
         # Select quality
         if len(urls['source']) == 0:
-            progress_dialog.close()
             xbmcgui.Dialog().notification(
                 PLUGIN_TITLE, 'No video sources found', xbmcgui.NOTIFICATION_ERROR, 3000, True
             )
             return
 
         elif len(urls['source']) > 1:
-            progress_dialog.close()
             selected_index = xbmcgui.Dialog().select(
                 'Select Quality', [(sourceItem[0] or '?') for sourceItem in urls['source']]
             )
             if selected_index == -1:
-                xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Download cancelled', ADDON_ICON, 2000, False)
                 return
             urls['media'] = urls['source'][selected_index][1]
-            progress_dialog.create(PLUGIN_TITLE, 'Starting download...')
         else:
             urls['media'] = urls['source'][0][1]
 
@@ -1609,15 +1589,12 @@ def actionDownload(params):
                 'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
             }
 
-        progress_dialog.update(70, 'Resolving stream URL...')
-
         media_head = False
         if flags['redirect']:
             media_head = solve_media_redirect(urls['media'], MEDIA_HEADERS)
             if not media_head and urls['backup']:
                 media_head = solve_media_redirect(urls['backup'], MEDIA_HEADERS)
             if not media_head:
-                progress_dialog.close()
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to resolve stream', xbmcgui.NOTIFICATION_ERROR, 3000, True
                 )
@@ -1630,7 +1607,9 @@ def actionDownload(params):
         if ADDON.getSetting('useHTTP') == 'true':
             urls['stream'] = urls['stream'].replace('https://', 'http://', 1)
 
-        progress_dialog.update(75, 'Downloading video...')
+        # Create progress dialog for actual download
+        progress_dialog = xbmcgui.DialogProgress()
+        progress_dialog.create(PLUGIN_TITLE, 'Downloading: ' + filename)
 
         # Download the file
         response = rqs_get().get(
@@ -1669,27 +1648,39 @@ def actionDownload(params):
             filepath += os.sep
         filepath += filename + file_ext
 
-        # Download with progress
+        # Download with progress and cancel support
         total_size = int(response.headers.get('content-length', 0))
         downloaded = 0
 
         with open(filepath, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
+                # Check if user cancelled
+                if progress_dialog.iscanceled():
+                    progress_dialog.close()
+                    f.close()
+                    # Delete partial file
+                    try:
+                        xbmcvfs.delete(filepath)
+                    except:
+                        pass
+                    return
+
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
                     if total_size > 0:
-                        progress = int((downloaded / total_size) * 25)
-                        progress_dialog.update(75 + progress, 'Downloaded: ' + str(downloaded // 1024 // 1024) + 'MB')
+                        percent = int((downloaded / total_size) * 100)
+                        progress_dialog.update(percent)
 
         progress_dialog.close()
         xbmcgui.Dialog().notification(
-            PLUGIN_TITLE, 'Download completed: ' + filename + file_ext, xbmcgui.NOTIFICATION_INFO, 4000, True
+            PLUGIN_TITLE, 'Download completed: ' + filename + file_ext, xbmcgui.NOTIFICATION_INFO, 3000, True
         )
 
     except Exception as e:
         try:
-            progress_dialog.close()
+            if progress_dialog:
+                progress_dialog.close()
         except:
             pass
         xbmc_debug('actionDownload error:', str(e))
