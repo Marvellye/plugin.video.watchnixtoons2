@@ -277,7 +277,7 @@ def actionCatalogSection(params):
                 entry_art['fanart'] = IMAGES_URL + '/thumbs' + img_url + '.jpg'
 
             yield (
-                build_url({'action': action, 'url': entry_url}),
+                build_url({'action': action, 'url': entry_url, 'showTitle': entry[1]}),
                 listItemFunc(entry[1], entry_url, entry_art, entry_plot, is_folder, is_special, entryParams),
                 is_folder
             )
@@ -321,6 +321,8 @@ def actionEpisodesMenu(params):
         setRawWindowProperty(PROPERTY_EPISODE_LIST_URL, params['url'])
         setWindowProperty(PROPERTY_EPISODE_LIST_DATA, listData)
 
+    show_title = params.get('showTitle')
+
     def _episodeItemsGen():
 
         playlist = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
@@ -358,7 +360,7 @@ def actionEpisodesMenu(params):
 
             url = base_url_remove( BASEURL, url )
 
-            item = listItemFunc(title, url, art_dict, plot, is_folder=False, is_special=False, oldParams=None)
+            item = listItemFunc(title, url, art_dict, plot, is_folder=False, is_special=False, oldParams=None, show_title=show_title)
             item_params['url'] = url
             item_url = build_url(item_params)
             playlist.add(item_url, item)
@@ -483,7 +485,7 @@ def actionRecentlyWatchedMenu(params):
                         art_dict = {'icon': ADDON_ICON, 'thumb': thumb_from_hash, 'poster': thumb_from_hash}
 
             yield (
-                build_url({'action': 'actionEpisodesMenu', 'url': title_data[ 'url' ]}),
+                build_url({'action': 'actionEpisodesMenu', 'url': title_data[ 'url' ], 'showTitle': title_data['name']}),
                 makeListItem(title_data[ 'name' ], title_data[ 'url' ], art_dict, entry_plot, True, None, None, True),
                 True
             )
@@ -978,7 +980,7 @@ def get_title_info(unescaped_title):
 
     return (unescaped_title.strip(' -'), None, None, None, '')
 
-def makeListItem(title, url, art_dict, plot, is_folder, is_special, oldParams, isRecent=False):
+def makeListItem(title, url, art_dict, plot, is_folder, is_special, oldParams, isRecent=False, show_title=None):
 
     unescaped_title = unescapeHTMLText(title)
     plot = unescapeHTMLText(plot)
@@ -988,10 +990,13 @@ def makeListItem(title, url, art_dict, plot, is_folder, is_special, oldParams, i
     if not (is_folder or is_special):
         title, season, episode, multi_part, episode_title = get_title_info(unescaped_title)
         # Playable content.
+
+        final_show_title = show_title if show_title else title
+
         is_playable = True
         item_info = {
             'mediatype': 'episode' if episode else 'tvshow',
-            'tvshowtitle': title,
+            'tvshowtitle': final_show_title,
             'title': episode_title,
             'plot': plot
         }
@@ -1055,7 +1060,7 @@ def makeListItem(title, url, art_dict, plot, is_folder, is_special, oldParams, i
 
     return item
 
-def makeListItemClean(title, url, art_dict, plot, is_folder, is_special, oldParams):
+def makeListItemClean(title, url, art_dict, plot, is_folder, is_special, oldParams, show_title=None):
 
     """
     Variant of the 'makeListItem()' function
@@ -1073,6 +1078,8 @@ def makeListItemClean(title, url, art_dict, plot, is_folder, is_special, oldPara
             item_set_info( item, {'mediatype': 'video', 'title': unescaped_title} )
     else:
         title, season, episode, multi_part, episode_title = get_title_info(unescaped_title)
+
+        final_show_title = show_title if show_title else title
 
         # dirty way to ensure is a string
         # this is due to filters being used, todo for clean-up
@@ -1093,8 +1100,8 @@ def makeListItemClean(title, url, art_dict, plot, is_folder, is_special, oldPara
             )
             item_info = {
                 'mediatype': 'episode',
-                'tvshowtitle': title,
-                'title': title,
+                'tvshowtitle': final_show_title,
+                'title': final_show_title,
                 'plot': plot,
                 'season': int(season) if season.isdigit() else -1,
                 'episode': int(episode)
@@ -1103,8 +1110,8 @@ def makeListItemClean(title, url, art_dict, plot, is_folder, is_special, oldPara
             item = xbmcgui.ListItem(title)
             item_info = {
                 'mediatype': 'tvshow',
-                'tvshowtitle': title,
-                'title': title,
+                'tvshowtitle': final_show_title,
+                'title': final_show_title,
                 'plot': plot
             }
         item_set_info( item, item_info )
@@ -1424,12 +1431,6 @@ def actionDownload(params):
         invalid_chars = r'[<>:"/\\|?*]'
         filename = re.sub(invalid_chars, '_', filename).strip()
 
-        # Get download path from settings
-        download_dir = ADDON.getSetting('downloadPath')
-        if not download_dir:
-            xbmcgui.Dialog().ok(PLUGIN_TITLE, 'Please set the download folder in the settings')
-            return
-
         # Reuse the resolution logic from actionResolve
         urls = {
             'page': ensure_current_domain( params['url'], BASEDOMAIN, domains_get() ),
@@ -1726,7 +1727,26 @@ def actionDownload(params):
             else:
                 return
 
+        # Determine subfolder based on content type
+        show_title = xbmc.getInfoLabel('ListItem.TVShowTitle')
+
+        if show_title:
+            download_dir = ADDON.getSetting('downloadPathTV')
+            if not download_dir:
+                xbmcgui.Dialog().ok(PLUGIN_TITLE, 'Please set the TV Shows download folder in the settings')
+                return
+            clean_show_title = re.sub(invalid_chars, '_', show_title).strip()
+            download_dir = os.path.join(download_dir, clean_show_title)
+        else:
+            download_dir = ADDON.getSetting('downloadPathMovies')
+            if not download_dir:
+                xbmcgui.Dialog().ok(PLUGIN_TITLE, 'Please set the Movies download folder in the settings')
+                return
+
         filepath = translate_path(download_dir)
+
+        if not os.path.exists(filepath):
+            os.makedirs(filepath)
         
         DownloadManager().download(
             urls['stream'],

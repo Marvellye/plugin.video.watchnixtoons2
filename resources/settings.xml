@@ -40,6 +40,7 @@
     <category label="Download">
         <setting type="lsep" label="Download Manager"/>
         <setting id="downloadMethod" label="Download Quality" type="enum" default="0" values="Select Quality Via Dialog|Auto Download Highest Quality|Auto Download Lowest Quality"/>
-        <setting id="downloadPath" label="Download Folder" type="folder" default=""/>
+        <setting id="downloadPathMovies" label="Movies Download Folder" type="folder" default=""/>
+        <setting id="downloadPathTV" label="TV Shows Download Folder" type="folder" default=""/>
     </category>
 </settings>
