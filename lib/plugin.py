@@ -2,6 +2,7 @@
 import re
 import sys
 import six
+import threading
 
 from itertools import chain
 from six.moves import urllib_parse
@@ -1496,7 +1497,7 @@ def actionDownload(params):
             xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Unable to get video name', xbmcgui.NOTIFICATION_ERROR, 3000, True)
             return
 
-        xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Getting quality...', ADDON_ICON, 2000, False)
+        xbmc.executebuiltin('ActivateWindow(busydialognocancel)')
 
         # Clean filename
         invalid_chars = r'[<>:"/\\|?*]'
@@ -1547,6 +1548,7 @@ def actionDownload(params):
 
             if is_premium is False:
                 xbmc_debug( 'Premium video workaround failed' )
+                xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
                 # Notify about premium only video
                 xbmcgui.Dialog().ok(
                     PLUGIN_TITLE + ' Fail',
@@ -1562,9 +1564,11 @@ def actionDownload(params):
         if 'playChapters' in params or ADDON.getSetting('chapterEpisodes') == 'true':
             data_indices = re.compile( SITE_SETTINGS[ 'chapter' ][ 'regex' ], re.MULTILINE ).findall(content)
             if len(data_indices) > 1:
+                xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
                 selected_index = xbmcgui.Dialog().select(
                     'Select Chapter', ['Chapter '+str(n) for n in xrange(1, len(data_indices)+1)]
                 )
+                xbmc.executebuiltin('ActivateWindow(busydialognocancel)')
             else:
                 selected_index = 0
 
@@ -1594,6 +1598,7 @@ def actionDownload(params):
             urls['embed'] = _decodeSource(content[embed_url_index:])
 
         if not urls['embed'] and not urls['stream']:
+            xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
             xbmcgui.Dialog().ok(PLUGIN_TITLE, 'Unable to find a playable source')
             return
 
@@ -1611,6 +1616,7 @@ def actionDownload(params):
             html = r2.text
 
         if 'high volume of requests' in html:
+            xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
             xbmcgui.Dialog().ok(
                 PLUGIN_TITLE,
                 'Server temporarily blocked due to high volume'
@@ -1638,6 +1644,7 @@ def actionDownload(params):
                 )
 
                 if not r3.ok:
+                    xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
                     xbmcgui.Dialog().notification(
                         PLUGIN_TITLE, 'Failed to get video source', xbmcgui.NOTIFICATION_ERROR, 3000, True
                     )
@@ -1659,6 +1666,7 @@ def actionDownload(params):
                 urls['backup'] = json_data.get('cdn', '') + '/getvid?evid=' + (token_sd or token_hd or token_fhd)
             except Exception as e:
                 xbmc_debug('Error resolving getvid source:', str(e))
+                xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to resolve video source: ' + str(e), xbmcgui.NOTIFICATION_ERROR, 3000, True
                 )
@@ -1674,6 +1682,7 @@ def actionDownload(params):
                 flags['redirect'] = False
             except Exception as e:
                 xbmc_debug('Error parsing m3u8:', str(e))
+                xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to parse m3u8 URL', xbmcgui.NOTIFICATION_ERROR, 3000, True
                 )
@@ -1687,6 +1696,7 @@ def actionDownload(params):
                 flags['m3u8'] = True
             except Exception as e:
                 xbmc_debug('Error parsing redirected URL:', str(e))
+                xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to parse redirected URL', xbmcgui.NOTIFICATION_ERROR, 3000, True
                 )
@@ -1704,6 +1714,7 @@ def actionDownload(params):
                 urls['backup'] = backup_match.group(1) if backup_match else ''
             except Exception as e:
                 xbmc_debug('Error parsing sources:', str(e))
+                xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
                 xbmcgui.Dialog().notification(
                     PLUGIN_TITLE, 'Failed to parse video sources', xbmcgui.NOTIFICATION_ERROR, 3000, True
                 )
@@ -1711,10 +1722,83 @@ def actionDownload(params):
 
         # Select quality
         if len(urls['source']) == 0:
+            xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
             xbmcgui.Dialog().notification(
                 PLUGIN_TITLE, 'No video sources found', xbmcgui.NOTIFICATION_ERROR, 3000, True
             )
             return
+
+        # Async get sizes
+        
+        enhanced_sources = []
+        for label, url in urls['source']:
+            enhanced_sources.append({
+                'label': label,
+                'url': url,
+                'stream_url': None,
+                'media_head': None,
+                'size_str': ''
+            })
+
+        def size_worker(item):
+            headers = {
+                'User-Agent': WNT2_USER_AGENT,
+                'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
+            }
+            
+            stream_url = item['url']
+            media_head = None
+            
+            if flags['redirect']:
+                media_head = solve_media_redirect(stream_url, headers)
+                if not media_head and urls['backup']:
+                    media_head = solve_media_redirect(urls['backup'], headers)
+                
+                if media_head:
+                    stream_url = media_head.url
+                else:
+                    return
+            
+            if ADDON.getSetting('useHTTP') == 'true':
+                stream_url = stream_url.replace('https://', 'http://', 1)
+            
+            item['stream_url'] = stream_url
+            item['media_head'] = media_head
+            
+            size_bytes = 0
+            try:
+                if media_head and 'Content-Length' in media_head.headers:
+                    size_bytes = int(media_head.headers['Content-Length'])
+                elif not flags['m3u8']:
+                    h = rqs_get().head(stream_url, headers=headers, verify=False, timeout=5)
+                    if 'Content-Length' in h.headers:
+                        size_bytes = int(h.headers['Content-Length'])
+            except:
+                pass
+                
+            if size_bytes > 0:
+                if size_bytes < 1024 * 1024:
+                    size_str = "{:.2f} KB".format(size_bytes / 1024.0)
+                elif size_bytes < 1024 * 1024 * 1024:
+                    size_str = "{:.2f} MB".format(size_bytes / (1024.0 * 1024.0))
+                else:
+                    size_str = "{:.2f} GB".format(size_bytes / (1024.0 * 1024.0 * 1024.0))
+                item['size_str'] = size_str
+                item['label'] = item['label'] + ' (' + size_str + ')'
+
+        threads = []
+        for item in enhanced_sources:
+            t = threading.Thread(target=size_worker, args=(item,))
+            t.start()
+            threads.append(t)
+            
+        for t in threads:
+            t.join()
+            
+        urls['source'] = [(item['label'], item['url']) for item in enhanced_sources]
+        resolved_cache = {item['url']: item for item in enhanced_sources}
+
+        xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
 
         force_select = False
         while True:
@@ -1744,44 +1828,55 @@ def actionDownload(params):
                 }
 
             media_head = False
-            if flags['redirect']:
-                media_head = solve_media_redirect(urls['media'], MEDIA_HEADERS)
-                if not media_head and urls['backup']:
-                    media_head = solve_media_redirect(urls['backup'], MEDIA_HEADERS)
-                if not media_head:
-                    xbmcgui.Dialog().notification(
-                        PLUGIN_TITLE, 'Failed to resolve stream', xbmcgui.NOTIFICATION_ERROR, 3000, True
-                    )
-                    return
-                urls['stream'] = media_head.url
-            else :
-                urls['stream'] = urls['media']
+            cached = resolved_cache.get(urls['media'])
+            
+            if cached and cached['stream_url']:
+                urls['stream'] = cached['stream_url']
+                media_head = cached['media_head']
+                size_str = cached['size_str']
+            else:
+                if flags['redirect']:
+                    media_head = solve_media_redirect(urls['media'], MEDIA_HEADERS)
+                    if not media_head and urls['backup']:
+                        media_head = solve_media_redirect(urls['backup'], MEDIA_HEADERS)
+                    if not media_head:
+                        xbmcgui.Dialog().notification(
+                            PLUGIN_TITLE, 'Failed to resolve stream', xbmcgui.NOTIFICATION_ERROR, 3000, True
+                        )
+                        return
+                    urls['stream'] = media_head.url
+                else :
+                    urls['stream'] = urls['media']
 
-            # Use HTTP if setting enabled
-            if ADDON.getSetting('useHTTP') == 'true':
-                urls['stream'] = urls['stream'].replace('https://', 'http://', 1)
+                # Use HTTP if setting enabled
+                if ADDON.getSetting('useHTTP') == 'true':
+                    urls['stream'] = urls['stream'].replace('https://', 'http://', 1)
 
-            # Get File Size
-            size_str = ""
-            try:
-                size_bytes = 0
-                if media_head and 'Content-Length' in media_head.headers:
-                    size_bytes = int(media_head.headers['Content-Length'])
-                elif not flags['m3u8']:
-                    # Try HEAD request
-                    h = rqs_get().head(urls['stream'], headers=MEDIA_HEADERS, verify=False, timeout=5)
-                    if 'Content-Length' in h.headers:
-                        size_bytes = int(h.headers['Content-Length'])
-                
-                if size_bytes > 0:
-                    if size_bytes < 1024 * 1024:
-                        size_str = "{:.2f} KB".format(size_bytes / 1024.0)
-                    elif size_bytes < 1024 * 1024 * 1024:
-                        size_str = "{:.2f} MB".format(size_bytes / (1024.0 * 1024.0))
-                    else:
-                        size_str = "{:.2f} GB".format(size_bytes / (1024.0 * 1024.0 * 1024.0))
-            except:
-                pass
+                # Get File Size
+                size_str = ""
+                try:
+                    size_bytes = 0
+                    if media_head and 'Content-Length' in media_head.headers:
+                        size_bytes = int(media_head.headers['Content-Length'])
+                    elif not flags['m3u8']:
+                        # Try HEAD request
+                        h = rqs_get().head(urls['stream'], headers=MEDIA_HEADERS, verify=False, timeout=5)
+                        if 'Content-Length' in h.headers:
+                            size_bytes = int(h.headers['Content-Length'])
+                    
+                    if size_bytes > 0:
+                        if size_bytes < 1024 * 1024:
+                            size_str = "{:.2f} KB".format(size_bytes / 1024.0)
+                        elif size_bytes < 1024 * 1024 * 1024:
+                            size_str = "{:.2f} MB".format(size_bytes / (1024.0 * 1024.0))
+                        else:
+                            size_str = "{:.2f} GB".format(size_bytes / (1024.0 * 1024.0 * 1024.0))
+                except:
+                    pass
+
+            # If user manually selected quality, skip confirmation
+            if force_select or ADDON.getSetting('downloadMethod') == '0':
+                break
 
             # Confirmation Dialog
             opts = ["Download" + (" (" + size_str + ")" if size_str else "")]
@@ -1825,6 +1920,7 @@ def actionDownload(params):
 
     except Exception as e:
         xbmc_debug('actionDownload error:', str(e))
+        xbmc.executebuiltin('Dialog.Close(busydialognocancel)')
         xbmcgui.Dialog().notification(
             PLUGIN_TITLE, 'Error: ' + str(e), xbmcgui.NOTIFICATION_ERROR, 3000, True
         )
