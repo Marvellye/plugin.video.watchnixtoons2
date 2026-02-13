@@ -15,7 +15,7 @@ PROP_DOWNLOADS = 'wnt2_downloads_list'
 
 class DownloadManager:
     _instance = None
-    _lock = threading.Lock()
+    _lock = threading.RLock()
 
     @classmethod
     def getInstance(cls):
@@ -236,3 +236,18 @@ class DownloadManager:
         self.cancel(task_id)
         self.tasks = [t for t in self.tasks if t['id'] != task_id]
         self._save_tasks()
+
+    def actionDownloadRestart(self, task_id):
+        with self._lock:
+            task = next((t for t in self.tasks if t['id'] == task_id), None)
+            if task:
+                name = task['name']
+                folder = task['folder']
+                page_url = task.get('page_url')
+                stream_url = task.get('stream_url')
+                if page_url:
+                    stream_url = None
+                self.add_task(name, folder, page_url, stream_url)
+                self.remove(task_id)
+                xbmcgui.Dialog().notification('Download Restarted', name, xbmcgui.NOTIFICATION_INFO)
+        

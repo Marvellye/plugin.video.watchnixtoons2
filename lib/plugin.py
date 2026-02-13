@@ -1405,6 +1405,7 @@ def actionDownloadsMenu(params):
         if status in ['downloading', 'pending']:
             cm.append(('Cancel Download', 'RunPlugin(%s?action=actionDownloadCancel&id=%s)' % (PLUGIN_URL, task['id'])))
         else:
+            cm.append(('Restart Download', 'RunPlugin(%s?action=actionDownloadRestart&id=%s)' % (PLUGIN_URL, task['id'])))
             cm.append(('Remove from List', 'RunPlugin(%s?action=actionDownloadRemove&id=%s)' % (PLUGIN_URL, task['id'])))
             
         item.addContextMenuItems(cm)
@@ -1437,6 +1438,10 @@ def actionDownloadsMenu(params):
         url = build_url({'action': 'actionDownloadRemoveAll'})
         xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
         
+        item = xbmcgui.ListItem('[B]Refresh[/B]')
+        url = build_url({'action': 'actionRefresh'})
+        xbmcplugin.addDirectoryItem(PLUGIN_ID, url, item, isFolder=False)
+        
     xbmcplugin.endOfDirectory(PLUGIN_ID)
 
 def actionDownloadCancel(params):
@@ -1449,6 +1454,13 @@ def actionDownloadCancelAll(params):
     DownloadManager.getInstance().cancel_all()
     xbmc.sleep(500)
     xbmc.executebuiltin('Container.Refresh')
+
+def actionDownloadRestart(params):
+    if 'id' in params:
+        DownloadManager.getInstance().actionDownloadRestart(params['id'])
+        DownloadManager.getInstance().start(resolve_stream_url)
+        xbmc.sleep(500)
+        xbmc.executebuiltin('Container.Refresh')
 
 def actionDownloadPauseAll(params):
     DownloadManager.getInstance().pause_all()
@@ -1470,6 +1482,9 @@ def actionDownloadStartQueue(params):
     DownloadManager.getInstance().start(resolve_stream_url)
     xbmc.executebuiltin('Container.Refresh')
 
+def actionRefresh(params):
+    xbmc.executebuiltin('Container.Refresh')
+
 def actionDownload(params):
 
     """ Downloads a video to the user's specified location """
@@ -1477,7 +1492,7 @@ def actionDownload(params):
     try:
         # Get the video title from the current list item
         filename = xbmc.getInfoLabel('ListItem.Label')
-        if not filename:
+        if not filename or filename == '..':
             xbmcgui.Dialog().notification(PLUGIN_TITLE, 'Unable to get video name', xbmcgui.NOTIFICATION_ERROR, 3000, True)
             return
 
@@ -1805,7 +1820,7 @@ def actionDownload(params):
             os.makedirs(filepath)
         
         dm = DownloadManager.getInstance()
-        dm.add_task(filename, filepath, stream_url=urls['stream'])
+        dm.add_task(filename, filepath, page_url=urls['page'], stream_url=urls['stream'])
         dm.start(resolve_stream_url)
 
     except Exception as e:
