@@ -67,6 +67,7 @@ class DownloadManager:
         self.tasks.append(task_data)
         self._save_tasks()
         xbmcgui.Dialog().notification('Download Added', name, xbmcgui.NOTIFICATION_INFO)
+        return task_data
 
     def start(self, resolve_func=None):
         if (self.active_thread and self.active_thread.is_alive()) or \

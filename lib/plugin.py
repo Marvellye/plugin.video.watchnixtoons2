@@ -3,6 +3,7 @@ import re
 import sys
 import six
 import threading
+import time
 
 from itertools import chain
 from six.moves import urllib_parse
@@ -2184,6 +2185,45 @@ def actionResolve(params):
             # is sometimes not renewed on the media servers
             urls['stream'] = urls['stream'].replace('https://', 'http://', 1)
 
+        local_playback = False
+        if ADDON.getSetting('downloadWhileStreaming') == 'true' and not flags['m3u8']:
+            dl_filename = xbmc.getInfoLabel('ListItem.Label')
+            if dl_filename:
+                invalid_chars = r'[<>:"/\\|?*]'
+                dl_filename = re.sub(invalid_chars, '_', dl_filename).strip()
+                
+                dl_show_title = xbmc.getInfoLabel('ListItem.TVShowTitle')
+                if dl_show_title:
+                    dl_base = ADDON.getSetting('downloadPathTV')
+                    if dl_base:
+                        clean_show = re.sub(invalid_chars, '_', dl_show_title).strip()
+                        dl_folder = os.path.join(dl_base, clean_show)
+                    else:
+                        dl_folder = None
+                else:
+                    dl_folder = ADDON.getSetting('downloadPathMovies')
+                
+                if dl_folder:
+                    if not os.path.exists(dl_folder):
+                        try: os.makedirs(dl_folder)
+                        except: pass
+                    
+                    dm = DownloadManager.getInstance()
+                    task = dm.add_task(dl_filename, dl_folder, page_url=urls['page'], stream_url=urls['stream'])
+                    dm.start(resolve_stream_url)
+                    
+                    # Wait for file to be created and have some data
+                    end_time = time.time() + 10
+                    while time.time() < end_time:
+                        if task.get('filepath') and os.path.exists(task['filepath']):
+                            if os.path.getsize(task['filepath']) > 1024 * 50: # 50KB buffer
+                                local_playback = True
+                                urls['stream'] = task['filepath']
+                                break
+                        if task['status'] == 'error':
+                            break
+                        time.sleep(0.5)
+
         # Need to use the exact same ListItem name & infolabels when playing
         # or else Kodi replaces that item in the UI listing.
         item = xbmcgui.ListItem(xbmc.getInfoLabel('ListItem.Label'))
@@ -2216,13 +2256,16 @@ def actionResolve(params):
             #item.setProperty('inputstream.adaptive.config', '{"ssl_verify_peer":false}')
         else:
 
-            MEDIA_HEADERS[ 'Referer' ] = BASEURL + '/'
+            if local_playback:
+                item.setPath(urls['stream'])
+            else:
+                MEDIA_HEADERS[ 'Referer' ] = BASEURL + '/'
 
-            item.setPath(urls['stream'] + '|' + '&'.join(key+'='+urllib_parse.quote_plus(val) for key, val in MEDIA_HEADERS.items()))
-            if media_head:
-                # Disable Kodi's MIME-type request, since we already know what it is.
-                item.setContentLookup(False)
-                item.setMimeType(media_head.headers.get('Content-Type', 'video/mp4'))
+                item.setPath(urls['stream'] + '|' + '&'.join(key+'='+urllib_parse.quote_plus(val) for key, val in MEDIA_HEADERS.items()))
+                if media_head:
+                    # Disable Kodi's MIME-type request, since we already know what it is.
+                    item.setContentLookup(False)
+                    item.setMimeType(media_head.headers.get('Content-Type', 'video/mp4'))
 
         # When coming in from a Favourite item, there will be no metadata.
         # Try to get at least a title.
